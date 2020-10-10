@@ -12,7 +12,7 @@ gcc -o ysfcon ysfcon.c
 # Usage
 Connect 2 DSTAR DPlus (REF) reflectors:
 ```
-./refcon [CALLSIGN] [REFName]:[Module]:[REFHostname][Port] [REFName]:[Module]:[REFHostname][Port]
+./refcon [CALLSIGN] [REFName:Module:REFHostname:Port] [REFName:Module:REFHostname:Port]
 ```
 Connect 2 YSF reflectors
 ```
