@@ -37,7 +37,7 @@
 #include <sys/ioctl.h>
 
 #define BUFSIZE 2048
-//#define DEBUG
+#define DEBUG
 # define SWAP(n) (((n) << 24) | (((n) & 0xff00) << 8) | (((n) >> 8) & 0xff00) | ((n) >> 24))
 #define K(I) roundConstants[I]
 static const uint32_t roundConstants[64] = {
@@ -884,7 +884,7 @@ int process_connect(int connect_status, char *buf, int h)
 		sprintf(latitude, "%08f", 50.0f);
 		sprintf(longitude, "%09f", 3.0f);
 		sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
-				438800000, 438800000, 1, 1, latitude, longitude, 0, "Detroit","USA", '2', "www.dudetronics.com", "20190131", "MMDVM"); // 302 bytes
+				438800000, 438800000, 1, 1, latitude, longitude, 0, "Detroit","USA", '4', "www.dudetronics.com", "20190131", "MMDVM"); // 302 bytes
 		len = 302;
 		fprintf(stderr, "Sending conf to DMR%d...\n", h);
 		break;
