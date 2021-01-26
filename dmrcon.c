@@ -179,6 +179,9 @@ int					rx_srcid;
 int					tx_tgid;
 int					host1_tg;
 int					host2_tg;
+char				*host1_pw;
+char				*host2_pw;
+
 
 static const unsigned char fillbuf[64] = { 0x80, 0 };
 
@@ -853,24 +856,34 @@ void get_emb_data(uint8_t* data, uint8_t lcss)
 
 int process_connect(int connect_status, char *buf, int h)
 {
-	char in[11];
+	char in[100];
 	char out[400];
 	int len = 0;
 	char latitude[20U], longitude[20U];
-	memset(in, 0, 11);
+	memset(in, 0, 100);
 	memset(out, 0, 400);
 	
 	switch(connect_status){
 	case CONNECTING:
 		connect_status = DMR_AUTH;
 		memcpy(in, &buf[6], 4);
-		memcpy(&in[4], "passw0rd", 8);
 		memcpy(out, "RPTK", 4);
 		out[4] = (dmrid >> 24) & 0xff;
 		out[5] = (dmrid >> 16) & 0xff;
 		out[6] = (dmrid >> 8) & 0xff;
 		out[7] = (dmrid >> 0) & 0xff;
-		sha256_generate(in, 8 + sizeof(uint32_t), &out[8]);
+		
+		if(h == 1){
+			memcpy(&in[4], host1_pw, strlen(host1_pw));
+			sha256_generate(in, strlen(host1_pw) + sizeof(uint32_t), &out[8]);
+		}
+		else if(h == 2){
+			memcpy(&in[4], host2_pw, strlen(host2_pw));
+			sha256_generate(in, strlen(host2_pw) + sizeof(uint32_t), &out[8]);
+		}
+		//memcpy(&in[4], "passw0rd", 8);
+		//sha256_generate(in, 8 + sizeof(uint32_t), &out[8]);
+		
 		len = 40;
 		fprintf(stderr, "Sending auth to DMR%d...\n", h);
 		break;
@@ -965,19 +978,23 @@ int main(int argc, char **argv)
 	uint16_t streamid = 0;
 	
 	if(argc != 5){
-		fprintf(stderr, "Usage: dmrcon [CALLSIGN] [DMRID] [YSFHost1IP:PORT:TG] [YSFHost2IP:PORT:TG]\n");
+		fprintf(stderr, "Usage: dmrcon [CALLSIGN] [DMRID] [DMRHost1IP:PORT:TG:PW] [DMRHost2IP:PORT:TG:PW]\n");
 		return 0;
 	}
 	else{
 		memset(callsign, ' ', 10);
 		memcpy(callsign, argv[1], strlen(argv[1]));
+		//memset(host1_pw, 0, 100);
+		//memset(host2_pw, 0, 100);
 		dmrid = atoi(argv[2]);
 		host1_url = strtok(argv[3], ":");
 		host1_port = atoi(strtok(NULL, ":"));
 		host1_tg = atoi(strtok(NULL, ":"));
+		host1_pw = strtok(NULL, ":");
 		host2_url = strtok(argv[4], ":");
 		host2_port = atoi(strtok(NULL, ":"));
 		host2_tg = atoi(strtok(NULL, ":"));
+		host2_pw = strtok(NULL, ":");
 		printf("DMR1: %s:%d\n", host1_url, host1_port);
 		printf("DMR2: %s:%d\n", host2_url, host2_port);
 	}
@@ -1086,14 +1103,19 @@ int main(int argc, char **argv)
 			}
 		}
 //#ifdef DEBUG
-		if(rxlen == 11){
+		if(rxlen >= 11){
 			if(rx.sin_addr.s_addr == host1.sin_addr.s_addr){
-			fprintf(stderr, "RECV DMR1 PING %d\n", ping_cnt1++);
+			//fprintf(stderr, "RECV DMR1 PING %d\n", ping_cnt1++);
+				fprintf(stderr, "RECV DMR1: ");
 			}
 			else if(rx.sin_addr.s_addr == host2.sin_addr.s_addr){
-				fprintf(stderr, "RECV DMR2 PING %d\n", ping_cnt2++);
+				//fprintf(stderr, "RECV DMR2 PING %d\n", ping_cnt2++);
+				fprintf(stderr, "RECV DMR2: ");
 			}
-			
+			for(int i = 0; i < rxlen; ++i){
+				fprintf(stderr, "%02x ", buf[i]);
+			}
+			fprintf(stderr, "\n");
 			fflush(stderr);
 		}
 //#endif
