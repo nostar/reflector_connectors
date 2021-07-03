@@ -20,6 +20,6 @@ Connect 2 YSF reflectors
 ```
 Connect 2 DMR talkgroups
 ```
-./dmrcon [CALLSIGN] [DMRID] [DMRHost1IP:PORT:TG] [DMRHost2IP:PORT:TG]
+./dmrcon [CALLSIGN] [DMRID] [DMRHost1IP:PORT:TG:PW] [DMRHost2IP:PORT:TG:PW]
 ```
 
