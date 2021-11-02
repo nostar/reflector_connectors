@@ -3,7 +3,6 @@
     Copyright (C) 2019 Doug McLain
 
     Based on C++ code from the following projects:
-    DSDCC		https://github.com/f4exb/dsdcc
     MMDVM_CM	https://github.com/juribeparada/MMDVM_CM
     XLXD		https://github.com/LX3JL/xlxd
 
@@ -703,6 +702,7 @@ void lc_get_data(uint8_t *bytes)
 void lc_get_data_bits(bool* bits)
 {
 	uint8_t bytes[9U];
+	memset(bytes, 0, 9);
 	lc_get_data(bytes);
 
 	byteToBitsBE(bytes[0U], bits + 0U);
@@ -897,7 +897,7 @@ int process_connect(int connect_status, char *buf, int h)
 		sprintf(latitude, "%08f", 50.0f);
 		sprintf(longitude, "%09f", 3.0f);
 		sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
-				438800000, 438800000, 1, 1, latitude, longitude, 0, "Detroit","USA", '4', "www.dudetronics.com", "20190131", "MMDVM"); // 302 bytes
+				438800000, 438800000, 1, 1, latitude, longitude, 0, "London","England", '4', "www.qrz.com", "20190131", "MMDVM"); // 302 bytes
 		len = 302;
 		fprintf(stderr, "Sending conf to DMR%d...\n", h);
 		break;
