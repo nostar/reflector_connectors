@@ -29,6 +29,7 @@
 #include <netdb.h>
 #include <ctype.h>
 #include <signal.h>
+#include <time.h>
 #include <sys/types.h> 
 #include <sys/socket.h> 
 #include <arpa/inet.h> 
@@ -36,8 +37,11 @@
 #include <sys/ioctl.h>
 
 #define BUFSIZE 2048
-#define DEBUG
-# define SWAP(n) (((n) << 24) | (((n) & 0xff00) << 8) | (((n) >> 8) & 0xff00) | ((n) >> 24))
+#define TIMEOUT 60
+//#define DEBUG
+
+#define SWAP(n) (((n) << 24) | (((n) & 0xff00) << 8) | (((n) >> 8) & 0xff00) | ((n) >> 24))
+
 #define K(I) roundConstants[I]
 static const uint32_t roundConstants[64] = {
 	0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
@@ -976,6 +980,8 @@ int main(int argc, char **argv)
 	static uint64_t ping_cnt1 = 0;
 	static uint64_t ping_cnt2 = 0;
 	uint16_t streamid = 0;
+	time_t pong_time1;
+	time_t pong_time2;
 	
 	if(argc != 5){
 		fprintf(stderr, "Usage: dmrcon [CALLSIGN] [DMRID] [DMRHost1IP:PORT:TG:PW] [DMRHost2IP:PORT:TG:PW]\n");
@@ -1046,6 +1052,7 @@ int main(int argc, char **argv)
 	while (1) {
 		if(host1_connect_status == DISCONNECTED){
 			host1_connect_status = CONNECTING;
+			pong_time1 = time(NULL);
 			buf[0] = 'R';
 			buf[1] = 'P';
 			buf[2] = 'T';
@@ -1067,6 +1074,7 @@ int main(int argc, char **argv)
 		}
 		if(host2_connect_status == DISCONNECTED){
 			host2_connect_status = CONNECTING;
+			pong_time2 = time(NULL);
 			buf[0] = 'R';
 			buf[1] = 'P';
 			buf[2] = 'T';
@@ -1102,7 +1110,7 @@ int main(int argc, char **argv)
 				udprx = udp2;
 			}
 		}
-//#ifdef DEBUG
+#ifdef DEBUG
 		if(rxlen >= 11){
 			if(rx.sin_addr.s_addr == host1.sin_addr.s_addr){
 			//fprintf(stderr, "RECV DMR1 PING %d\n", ping_cnt1++);
@@ -1118,10 +1126,13 @@ int main(int argc, char **argv)
 			fprintf(stderr, "\n");
 			fflush(stderr);
 		}
-//#endif
+#endif
 		if( rxlen && (udprx == udp1) && (rx.sin_addr.s_addr == host1.sin_addr.s_addr) ){
 			if((host1_connect_status != CONNECTED_RW) && (memcmp(buf, "RPTACK", 6U) == 0)){
 				host1_connect_status = process_connect(host1_connect_status, buf, 1);
+			}
+			else if( (host1_connect_status == CONNECTED_RW) && (memcmp(buf, "MSTPONG", 7U) == 0) ){
+				pong_time1 = time(NULL);
 			}
 			else if( (host1_connect_status == CONNECTED_RW) && (rxlen == 55) ){
 				rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
@@ -1139,6 +1150,9 @@ int main(int argc, char **argv)
 				buf[12] = (dmrid >> 16) & 0xff;
 				buf[13] = (dmrid >> 8) & 0xff;
 				buf[14] = (dmrid >> 0) & 0xff;
+				
+				if ( *(uint32_t *)(&buf[16]) == 0 )
+					*(uint32_t *)(&buf[16]) = 100; //workaround, XLX doesn't like streamid 0
 				
 				if(buf[15] > 0x90){
 					generate_header();
@@ -1167,6 +1181,9 @@ int main(int argc, char **argv)
 			if((host2_connect_status != CONNECTED_RW) && (memcmp(buf, "RPTACK", 6U) == 0)){
 				host2_connect_status = process_connect(host2_connect_status, buf, 2);
 			}
+			else if( (host2_connect_status == CONNECTED_RW) && (memcmp(buf, "MSTPONG", 7U) == 0) ){
+				pong_time2 = time(NULL);
+			}
 			else if( (host2_connect_status == CONNECTED_RW) && (rxlen == 55) ){
 				rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
 				if(rx_srcid == 0){
@@ -1183,6 +1200,9 @@ int main(int argc, char **argv)
 				buf[12] = (dmrid >> 16) & 0xff;
 				buf[13] = (dmrid >> 8) & 0xff;
 				buf[14] = (dmrid >> 0) & 0xff;
+				
+				if ( *(uint32_t *)(&buf[16]) == 0 )
+					*(uint32_t *)(&buf[16]) = 100; //workaround, XLX doesn't like streamid 0
 				
 				if(buf[15] > 0x90){
 					generate_header();
@@ -1206,6 +1226,14 @@ int main(int argc, char **argv)
 #endif
 				}
 			}
+		}
+		if (time(NULL)-pong_time1 > TIMEOUT) {
+			host1_connect_status = DISCONNECTED;
+			fprintf(stderr, "DMR1 connection timed out, retrying connection...\n");
+		}
+		if (time(NULL)-pong_time2 > TIMEOUT) {
+			host2_connect_status = DISCONNECTED;
+			fprintf(stderr, "DMR2 connection timed out, retrying connection...\n");
 		}
 	}
 }
