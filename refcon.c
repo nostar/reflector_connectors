@@ -109,7 +109,7 @@ void process_signal(int sig)
 	}
 	if(sig == SIGALRM){
 		if(c1 != host1_cnt){
-		c1 = host1_cnt;
+			c1 = host1_cnt;
 		}
 		else{
 			c1 = host1_cnt = 0;
@@ -391,14 +391,14 @@ int main(int argc, char **argv)
 #endif
 			}
 		}
-		if(rxlen == 0x1d){
+		if((rxlen == 0x1d) || (rxlen == 0x20)){
 			uint16_t s = (buf[14] << 8) | (buf[15] & 0xff);
 			if(s == streamid){
 				if( (udprx == udp1) && (rx.sin_addr.s_addr == host1.sin_addr.s_addr) ){
-					sendto(udp2, buf, 0x1d, 0, (const struct sockaddr *)&host2, sizeof(host2));
+					sendto(udp2, buf, rxlen, 0, (const struct sockaddr *)&host2, sizeof(host2));
 #ifdef DEBUG_SEND
 					fprintf(stderr, "SEND %s: ", ref2);
-					for(int i = 0; i < 0x1d; ++i){
+					for(int i = 0; i < rxlen; ++i){
 						fprintf(stderr, "%02x ", buf[i]);
 					}
 					fprintf(stderr, "\n");
@@ -406,10 +406,10 @@ int main(int argc, char **argv)
 #endif
 				}
 				else if( (udprx == udp2) && (rx.sin_addr.s_addr == host2.sin_addr.s_addr) ){
-					sendto(udp1, buf, 0x1d, 0, (const struct sockaddr *)&host1, sizeof(host1));
+					sendto(udp1, buf, rxlen, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG_SEND
 					fprintf(stderr, "SEND %s: ", ref1);
-					for(int i = 0; i < 0x1d; ++i){
+					for(int i = 0; i < rxlen; ++i){
 						fprintf(stderr, "%02x ", buf[i]);
 					}
 					fprintf(stderr, "\n");
