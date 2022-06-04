@@ -2,9 +2,7 @@
     DMRCon - DMR Server/TG Connector
     Copyright (C) 2019 Doug McLain
 
-    Based on C++ code from the following projects:
-    MMDVM_CM	https://github.com/juribeparada/MMDVM_CM
-    XLXD		https://github.com/LX3JL/xlxd
+    Based on code from https://github.com/juribeparada/MMDVM_CM
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
