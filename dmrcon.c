@@ -907,9 +907,9 @@ int process_connect(int connect_status, char *buf, int h)
 		connect_status = CONNECTED_RW;
 		memcpy(buf, "DMRD", 4);
 		buf[4] = 0x00;
-		buf[5] = (dmrid >> 16) & 0xff;
-		buf[6] = (dmrid >> 8) & 0xff;
-		buf[7] = (dmrid >> 0) & 0xff;
+		buf[5] = (((dmrid>99999999)?dmrid/100:dmrid) >> 16) & 0xff;
+		buf[6] = (((dmrid>99999999)?dmrid/100:dmrid) >> 8) & 0xff;
+		buf[7] = (((dmrid>99999999)?dmrid/100:dmrid) >> 0) & 0xff;
 		buf[11] = (dmrid >> 24) & 0xff;
 		buf[12] = (dmrid >> 16) & 0xff;
 		buf[13] = (dmrid >> 8) & 0xff;
@@ -1135,7 +1135,7 @@ int main(int argc, char **argv)
 			else if( (host1_connect_status == CONNECTED_RW) && (rxlen == 55) ){
 				rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
 				if(rx_srcid == 0){
-					rx_srcid = dmrid;
+					rx_srcid = ((dmrid>99999999)?dmrid/100:dmrid);
 					buf[5] = (rx_srcid >> 16) & 0xff;
 					buf[6] = (rx_srcid >> 8) & 0xff;
 					buf[7] = (rx_srcid >> 0) & 0xff;
@@ -1185,7 +1185,7 @@ int main(int argc, char **argv)
 			else if( (host2_connect_status == CONNECTED_RW) && (rxlen == 55) ){
 				rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
 				if(rx_srcid == 0){
-					rx_srcid = dmrid;
+					rx_srcid = ((dmrid>99999999)?dmrid/100:dmrid);
 					buf[5] = (rx_srcid >> 16) & 0xff;
 					buf[6] = (rx_srcid >> 8) & 0xff;
 					buf[7] = (rx_srcid >> 0) & 0xff;
