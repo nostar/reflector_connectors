@@ -21,6 +21,7 @@
 #include <signal.h>
 #include <unistd.h> 
 #include <string.h> 
+#include <time.h>
 #include <netdb.h>
 #include <ctype.h>
 #include <signal.h>
@@ -282,6 +283,7 @@ int main(int argc, char **argv)
 		}
 #endif
 		if((rxlen == 5) && (buf[4] == 0x01)){
+			srand(time(NULL));
 			int x = (rand() % (999999 - 7245 + 1)) + 7245;
 			char serial[9];
 			sprintf(serial, "HS%06d", x);
@@ -311,11 +313,25 @@ int main(int argc, char **argv)
 			sendto(udprx, buf, 3, 0, (const struct sockaddr *)&rx, sizeof(rx));
 
 			if(rx.sin_addr.s_addr == host1.sin_addr.s_addr){
-				//fprintf(stderr, "SEND %s: ", REF1);
+#ifdef DEBUG_SEND
+				fprintf(stderr, "SEND %s: ", ref1);
+				for(int i = 0; i < 3; ++i){
+					fprintf(stderr, "%02x ", buf[i]);
+				}
+				fprintf(stderr, "\n");
+				fflush(stderr);
+#endif
 				++host1_cnt;
 			}
 			else if(rx.sin_addr.s_addr == host2.sin_addr.s_addr){
-				//fprintf(stderr, "SEND %s: ", REF2);
+#ifdef DEBUG_SEND
+				fprintf(stderr, "SEND %s: ", ref2);
+				for(int i = 0; i < 3; ++i){
+					fprintf(stderr, "%02x ", buf[i]);
+				}
+				fprintf(stderr, "\n");
+				fflush(stderr);
+#endif
 				++host2_cnt;
 			}
 /*
