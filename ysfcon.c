@@ -24,7 +24,6 @@
 #include <string.h> 
 #include <netdb.h>
 #include <ctype.h>
-#include <signal.h>
 #include <sys/types.h> 
 #include <sys/socket.h> 
 #include <arpa/inet.h> 
@@ -1165,7 +1164,7 @@ int main(int argc, char **argv)
 				rxlen = recvfrom(udp1, buf, BUFSIZE, 0, (struct sockaddr *)&rx, &l);
 				udprx = udp1;
 			}
-			if(FD_ISSET(udp2, &udpset)) {
+			else if(FD_ISSET(udp2, &udpset)) {
 				rxlen = recvfrom(udp2, buf, BUFSIZE, 0, (struct sockaddr *)&rx, &l);
 				udprx = udp2;
 			}
