@@ -33,6 +33,12 @@
 #define BUFSIZE 2048
 //#define DEBUG
 
+// YSF Data Type (DT) values from FICH
+#define YSF_DT_VD_MODE1      0x00U  // Voice Data Mode 1 - VOICE
+#define YSF_DT_DATA_FR_MODE  0x01U  // Data Frame Mode - DATA (drop these)
+#define YSF_DT_VD_MODE2      0x02U  // Voice Data Mode 2 - VOICE
+#define YSF_DT_VOICE_FR_MODE 0x03U  // Voice Frame Mode - VOICE
+
 const unsigned char BIT_MASK_TABLE[] = {0x80U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U, 0x02U, 0x01U};
 
 #define WRITE_BIT1(p,i,b) p[(i)>>3] = (b) ? (p[(i)>>3] | BIT_MASK_TABLE[(i)&7]) : (p[(i)>>3] & ~BIT_MASK_TABLE[(i)&7])
@@ -1055,6 +1061,11 @@ void fich_set_voip(bool on)
 		m_fich[2U] &= 0xFBU;
 }
 
+unsigned char fich_get_dt(void)
+{
+	return m_fich[2U] & 0x03U;
+}
+
 int main(int argc, char **argv)
 {
 	struct sockaddr_in rx;
@@ -1186,12 +1197,23 @@ int main(int argc, char **argv)
 #endif
 		if(rxlen == 155){
 			fich_decode(&buf[40]);
+
+			// Only pass voice packets, drop data frames
+			unsigned char dt = fich_get_dt();
+			if(dt == YSF_DT_DATA_FR_MODE){
+#ifdef DEBUG
+				fprintf(stderr, "DROP: Data frame (DT=%02x)\n", dt);
+				fflush(stderr);
+#endif
+				continue;  // Skip non-voice packets
+			}
+
 			fich_set_voip(false);
 			fich_encode(&buf[40]);
 			if( (udprx == udp1) && (rx.sin_addr.s_addr == host1.sin_addr.s_addr) ){
 				sendto(udp2, buf, rxlen, 0, (const struct sockaddr *)&host2, sizeof(host2));
 #ifdef DEBUG
-				fprintf(stderr, "SEND YSF2: ");
+				fprintf(stderr, "SEND YSF2 (DT=%02x): ", dt);
 				for(int i = 0; i < rxlen; ++i){
 					fprintf(stderr, "%02x ", buf[i]);
 				}
@@ -1202,7 +1224,7 @@ int main(int argc, char **argv)
 			else if( (udprx == udp2) && (rx.sin_addr.s_addr == host2.sin_addr.s_addr) ){
 				sendto(udp1, buf, rxlen, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG
-				fprintf(stderr, "SEND YSF1: ");
+				fprintf(stderr, "SEND YSF1 (DT=%02x): ", dt);
 				for(int i = 0; i < rxlen; ++i){
 					fprintf(stderr, "%02x ", buf[i]);
 				}
