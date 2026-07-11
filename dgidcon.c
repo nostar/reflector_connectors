@@ -1,6 +1,8 @@
 /*
     dgidcon - fork ysfcon YSF Reflector Connector with FICH codec + DGID override + auto-room activation
     Copyright (C) 2019 Doug McLain - Modificado 2025 by HP3ICC Esteban Mackay
+    - Mejora: Lost Timer con procesamiento de heartbeat (YSFP)
+    - Reconexión independiente para Host1 y Host2
 */
 #include <stdio.h>
 #include <stdbool.h>
@@ -15,9 +17,12 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
-#include <time.h>  // ← AÑADE ESTE
+#include <time.h>
+#include <errno.h>
 
 #define BUFSIZE 2048
+#define LOST_TIMEOUT 10      // 45 segundos sin respuesta del reflector = caído (aumentado para evitar falsos)
+#define HEARTBEAT_INTERVAL 5 // Heartbeat cada 5 segundos
 //#define DEBUG
 
 const unsigned char BIT_MASK_TABLE[] = {0x80U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U, 0x02U, 0x01U};
@@ -47,6 +52,12 @@ uint8_t host2_connect;
 /* DGID override (0 = pass-through, 1-99 = forzar ese DGID) */
 uint8_t dgid_to_host1 = 0U;
 uint8_t dgid_to_host2 = 0U;
+
+/* Variables para Lost Timer y reconexión independiente */
+time_t last_rx_host1 = 0;
+time_t last_rx_host2 = 0;
+uint8_t host1_connected = 0;
+uint8_t host2_connected = 0;
 
 uint16_t m_metrics1[16];
 uint16_t m_metrics2[16];
@@ -733,10 +744,10 @@ static const unsigned int DECODING_TABLE_23127[] = {
     0x403000U, 0x080840U, 0x100044U, 0x011008U, 0x022800U, 0x004110U, 0x100040U, 0x100041U, 0x100042U, 0x440020U, 
     0x011001U, 0x011000U, 0x080420U, 0x011002U, 0x100048U, 0x011004U, 0x204200U, 0x028080U};
 
-#define X22 0x00400000 /* vector representation of X^{22} */
-#define X11 0x00000800 /* vector representation of X^{11} */
-#define MASK12 0xfffff800 /* auxiliary vector for testing */
-#define GENPOL 0x00000c75 /* generator polinomial, g(x) */
+#define X22 0x00400000
+#define X11 0x00000800
+#define MASK12 0xfffff800
+#define GENPOL 0x00000c75
 
 int max(int x, int y)
 {
@@ -744,7 +755,7 @@ int max(int x, int y)
 }
 
 /* ============================================================= */
-/* DECLARACIONES DE FUNCIONES FICH (para evitar warnings)      */
+/* DECLARACIONES DE FUNCIONES FICH */
 /* ============================================================= */
 void fich_set_dt(unsigned char dt);
 void fich_set_fi(unsigned char fi);
@@ -755,25 +766,22 @@ void fich_set_ft(unsigned char ft);
 void fich_set_mr(unsigned char mr);
 void fich_set_voip(bool on);
 void fich_encode(unsigned char* bytes);
-void fich_decode(const unsigned char* bytes);  // ← AÑADIR ESTA DECLARACIÓN
+void fich_decode(const unsigned char* bytes);
 void generate_voice_payload(unsigned char* payload, int frame_num);
+void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t forced_dgid);
 
 /* ============================================================= */
-/* ACTIVACIÓN AUTOMÁTICA CON TRANSMISIÓN CAPTURADA - 2 SEGUNDOS */
+/* ACTIVACIÓN AUTOMÁTICA */
 /* ============================================================= */
 void generate_voice_payload(unsigned char* payload, int frame_num)
 {
-    // Patrón que simula mejor datos de voz YSF
     for (int i = 0; i < 100; i++) {
-        // Alternar entre silencio y tono
         if ((frame_num + i) % 200 < 100) {
-            payload[i] = 0x55; // Patrón alternante
+            payload[i] = 0x55;
         } else {
-            payload[i] = 0xAA; // Patrón inverso
+            payload[i] = 0xAA;
         }
     }
-    
-    // Añadir algún marcador de frame como en implementaciones reales
     payload[0] = (frame_num >> 8) & 0xFF;
     payload[1] = frame_num & 0xFF;
 }
@@ -785,12 +793,8 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
     uint8_t fn = 0;
     struct timespec ts;
     
-    // 1. HEADER FRAMES
-    fprintf(stderr, "Enviando frames de header...\n");
     for (int i = 0; i < 5; i++) {
         memset(frame, 0x00, 155);
-        
-        // Header YSF
         memcpy(frame, "YSFD", 4);
         memcpy(frame + 4, callsign, 10);
         memcpy(frame + 14, callsign, 10);
@@ -800,72 +804,26 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         frame[46] = 0x00; frame[47] = 0x00;
         frame[48] = fn;
         
-        // FICH - Header Frame (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
         memset(m_fich, 0x00, 6);
-        fich_set_fi(0);              // FI=0: Header
-        fich_set_cs(2);              // CS=2: YSF  
-        fich_set_cm(0);              // CM=0: Non-communication (ORIGINAL)
+        fich_set_fi(0);
+        fich_set_cs(2);
+        fich_set_cm(0);
         fich_set_fn(fn >> 1);
         fich_set_ft(1);
         fich_set_mr(0);
         fich_set_dt(2);
         fich_set_voip(false);
-        
         m_fich[3] = forced_dgid;
-        
         fich_encode(frame + 40);
-        
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-//        fprintf(stderr, "✓ Header frame %d enviado\n", i);
         fn += 2;
-        
         ts.tv_sec = 0;
         ts.tv_nsec = 90000000L;
         nanosleep(&ts, NULL);
     }
     
-    // 2. VOICE FRAMES (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
-    fprintf(stderr, "Enviando frames de voz...\n");
     for (int i = 0; i < 20; i++) {
         memset(frame, 0x00, 155);
-        
-        memcpy(frame, "YSFD", 4);
-        memcpy(frame + 4, callsign, 10);
-        memcpy(frame + 14, callsign, 10);
-        memcpy(frame + 24, "ALL       ", 10);
-        memcpy(frame + 34, "          ", 10);
-        frame[44] = 0x00; frame[45] = 0x00;
-        frame[46] = 0x00; frame[47] = 0x00;
-        frame[48] = fn;
-        
-        memset(m_fich, 0x00, 6);
-        fich_set_fi(2);              // FI=1: Voice Full Rate (ORIGINAL)
-        fich_set_cs(2);              // CS=2: YSF
-        fich_set_cm(1);              // CM=0: Non-communication (ORIGINAL)
-        fich_set_fn(fn >> 1);
-        fich_set_ft(0);
-        fich_set_mr(0);
-        fich_set_dt(2);
-        fich_set_voip(false);
-        m_fich[3] = forced_dgid;
-        
-        fich_encode(frame + 40);
-        generate_voice_payload(frame + 55, i);
-        
-        sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-//        fprintf(stderr, "✓ Voice frame %d enviado\n", i);
-        fn += 2;
-        
-        ts.tv_sec = 0;
-        ts.tv_nsec = 90000000L;
-        nanosleep(&ts, NULL);
-    }
-    
-    // 3. TERMINATION (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
-    fprintf(stderr, "Enviando frame de terminación...\n");
-    for (int i = 0; i < 3; i++) {
-        memset(frame, 0x00, 155);
-        
         memcpy(frame, "YSFD", 4);
         memcpy(frame + 4, callsign, 10);
         memcpy(frame + 14, callsign, 10);
@@ -878,29 +836,79 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         memset(m_fich, 0x00, 6);
         fich_set_fi(2);
         fich_set_cs(2);
-        fich_set_cm(1);              // CM=0: Non-communication (ORIGINAL)
+        fich_set_cm(1);
         fich_set_fn(fn >> 1);
-        fich_set_ft(1);              // FT=1: Final
+        fich_set_ft(0);
         fich_set_mr(0);
         fich_set_dt(2);
         fich_set_voip(false);
         m_fich[3] = forced_dgid;
-        
         fich_encode(frame + 40);
-        
+        generate_voice_payload(frame + 55, i);
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-//        fprintf(stderr, "✓ Termination frame %d enviado\n", i);
+        fn += 2;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 90000000L;
+        nanosleep(&ts, NULL);
+    }
+    
+    for (int i = 0; i < 3; i++) {
+        memset(frame, 0x00, 155);
+        memcpy(frame, "YSFD", 4);
+        memcpy(frame + 4, callsign, 10);
+        memcpy(frame + 14, callsign, 10);
+        memcpy(frame + 24, "ALL       ", 10);
+        memcpy(frame + 34, "          ", 10);
+        frame[44] = 0x00; frame[45] = 0x00;
+        frame[46] = 0x00; frame[47] = 0x00;
+        frame[48] = fn;
         
+        memset(m_fich, 0x00, 6);
+        fich_set_fi(2);
+        fich_set_cs(2);
+        fich_set_cm(1);
+        fich_set_fn(fn >> 1);
+        fich_set_ft(1);
+        fich_set_mr(0);
+        fich_set_dt(2);
+        fich_set_voip(false);
+        m_fich[3] = forced_dgid;
+        fich_encode(frame + 40);
+        sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
         if (i < 2) {
             ts.tv_sec = 0;
             ts.tv_nsec = 100000000L;
             nanosleep(&ts, NULL);
         }
     }
-    
     fprintf(stderr, "Transmisión YSF completa enviada (DGID %02u)\n", forced_dgid);
 }
 
+/* ============================================================= */
+/* RECONEXIÓN INDEPENDIENTE */
+/* ============================================================= */
+void reconnect_host(int udp_sock, struct sockaddr_in *host, uint8_t host_id, uint8_t dgid, uint8_t *connect_flag)
+{
+    fprintf(stderr, "🔄 Reconectando a YSF%d...\n", host_id);
+    
+    buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
+    memcpy(&buf[4], callsign, 10);
+    sendto(udp_sock, buf, 14, 0, (struct sockaddr *)host, sizeof(*host));
+    
+    sleep(1);
+    
+    if (dgid >= 1U) {
+        send_activation_burst(udp_sock, host, dgid);
+        fprintf(stderr, "✅ Activación YSF%d enviada (DGID %02u)\n", host_id, dgid);
+    }
+    
+    *connect_flag = 1;
+    fprintf(stderr, "✅ YSF%d reconectado\n", host_id);
+}
+
+/* ============================================================= */
+/* PROCESAMIENTO DE SEÑALES */
+/* ============================================================= */
 void process_signal(int sig)
 {
     if(sig == SIGINT){
@@ -913,14 +921,23 @@ void process_signal(int sig)
         exit(EXIT_SUCCESS);
     }
     if(sig == SIGALRM){
-        buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
-        memcpy(&buf[4], callsign, 10);
-        sendto(udp1, buf, 14, 0, (const struct sockaddr *)&host1, sizeof(host1));
-        sendto(udp2, buf, 14, 0, (const struct sockaddr *)&host2, sizeof(host2));
-        alarm(5);
+        if(host1_connected) {
+            buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
+            memcpy(&buf[4], callsign, 10);
+            sendto(udp1, buf, 14, 0, (struct sockaddr *)&host1, sizeof(host1));
+        }
+        if(host2_connected) {
+            buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
+            memcpy(&buf[4], callsign, 10);
+            sendto(udp2, buf, 14, 0, (struct sockaddr *)&host2, sizeof(host2));
+        }
+        alarm(HEARTBEAT_INTERVAL);
     }
 }
 
+/* ============================================================= */
+/* FUNCIONES FICH */
+/* ============================================================= */
 void addCCITT162(unsigned char *in, unsigned int length)
 {
     union crc { uint16_t crc16; uint8_t crc8[2U]; };
@@ -1079,7 +1096,6 @@ void fich_encode(unsigned char* bytes)
     }
 }
 
-/* Implementación de las funciones FICH (ahora al final para que compilen correctamente) */
 void fich_set_dt(unsigned char dt)  { m_fich[2U] &= 0x3FU; m_fich[2U] |= (dt << 6) & 0xC0U; }
 void fich_set_fi(unsigned char fi)  { m_fich[0U] &= 0x3FU; m_fich[0U] |= (fi << 6) & 0xC0U; }
 void fich_set_cs(unsigned char cs)  { m_fich[0U] &= 0xCFU; m_fich[0U] |= (cs << 4) & 0x30U; }
@@ -1089,6 +1105,9 @@ void fich_set_ft(unsigned char ft)  { m_fich[1U] &= 0xF8U; m_fich[1U] |= ft & 0x
 void fich_set_mr(unsigned char mr)  { m_fich[2U] &= 0xC7U; m_fich[2U] |= (mr << 3) & 0x38U; }
 void fich_set_voip(bool on)         { if (on) m_fich[2U] |= 0x04U; else m_fich[2U] &= 0xFBU; }
 
+/* ============================================================= */
+/* MAIN */
+/* ============================================================= */
 int main(int argc, char **argv)
 {
     struct sockaddr_in rx;
@@ -1097,10 +1116,13 @@ int main(int argc, char **argv)
     int host1_port, host2_port;
     socklen_t l = sizeof(host1);
     int rxlen, r, udprx, maxudp;
+    struct timeval tv;
 
     if(argc != 4 && argc != 6){
         fprintf(stderr, "Usage: ysf2ysf [CALLSIGN] [YSFHost1:PORT] [YSFHost2:PORT] [DGID_to_Host1] [DGID_to_Host2]\n");
         fprintf(stderr, "DGID opcionales 00-99. Sin ellos → pass-through\n");
+        fprintf(stderr, "Lost Timer: %d segundos sin respuesta = reflector caído\n", LOST_TIMEOUT);
+        fprintf(stderr, "Heartbeat: cada %d segundos\n", HEARTBEAT_INTERVAL);
         return 0;
     }
 
@@ -1122,9 +1144,11 @@ int main(int argc, char **argv)
     printf("YSF1: %s:%d\n", host1_url, host1_port);
     printf("YSF2: %s:%d\n", host2_url, host2_port);
     if(argc == 6)
-        printf("DGID → Hacia YSF1: %02u  |  Hacia YSF2: %02u  + activación automática de sala\n", dgid_to_host1, dgid_to_host2);
+        printf("DGID → Hacia YSF1: %02u  |  Hacia YSF2: %02u  + activación automática\n", dgid_to_host1, dgid_to_host2);
     else
         printf("DGID: Pass-through (sin activación automática)\n");
+    printf("Lost Timer: %d segundos sin respuesta = reflector caído\n", LOST_TIMEOUT);
+    printf("Heartbeat: cada %d segundos\n", HEARTBEAT_INTERVAL);
 
     signal(SIGINT, process_signal);
     signal(SIGALRM, process_signal);
@@ -1132,6 +1156,9 @@ int main(int argc, char **argv)
     if ((udp1 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { perror("udp1"); return 0; }
     if ((udp2 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { perror("udp2"); return 0; }
     maxudp = max(udp1, udp2) + 1;
+
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
 
     memset(&host1, 0, sizeof(host1)); host1.sin_family = AF_INET; host1.sin_port = htons(host1_port);
     memset(&host2, 0, sizeof(host2)); host2.sin_family = AF_INET; host2.sin_port = htons(host2_port);
@@ -1143,34 +1170,54 @@ int main(int argc, char **argv)
 
     host1_connect = 1;
     host2_connect = 1;
-    alarm(5);
+    host1_connected = 0;
+    host2_connected = 0;
+    last_rx_host1 = time(NULL);
+    last_rx_host2 = time(NULL);
+    
+    alarm(HEARTBEAT_INTERVAL);
+
+    fprintf(stderr, "=== Puente YSF iniciado con Lost Timer ===\n");
+    fprintf(stderr, "Reconexión independiente para cada host\n");
 
     while (1) {
-        if(host1_connect){
-            host1_connect = 0;
-            buf[0]='Y';buf[1]='S';buf[2]='F';buf[3]='P';
-            memcpy(&buf[4], callsign, 10);
-            sendto(udp1, buf, 14, 0, (struct sockaddr *)&host1, sizeof(host1));
-            fprintf(stderr, "Connecting to YSF1...\n");
-            sleep(1);      // ← Espera 2 segundos antes del burst
-            if (argc == 6 && dgid_to_host1 >= 1U)
-                send_activation_burst(udp1, &host1, dgid_to_host1);
+        time_t now = time(NULL);
+        
+        // Lost Timer Host1
+        if (host1_connected && (now - last_rx_host1) > LOST_TIMEOUT) {
+            fprintf(stderr, "⚠️ YSF1: %ld segundos sin respuesta, reflector CAÍDO\n", 
+                    (long)(now - last_rx_host1));
+            host1_connected = 0;
+            host1_connect = 1;
         }
-        if(host2_connect){
-            host2_connect = 0;
-            buf[0]='Y';buf[1]='S';buf[2]='F';buf[3]='P';
-            memcpy(&buf[4], callsign, 10);
-            sendto(udp2, buf, 14, 0, (struct sockaddr *)&host2, sizeof(host2));
-            fprintf(stderr, "Connecting to YSF2...\n");
-            sleep(1);      // ← Espera 2 segundos antes del burst
-            if (argc == 6 && dgid_to_host2 >= 1U)
-                send_activation_burst(udp2, &host2, dgid_to_host2);
+        
+        // Lost Timer Host2
+        if (host2_connected && (now - last_rx_host2) > LOST_TIMEOUT) {
+            fprintf(stderr, "⚠️ YSF2: %ld segundos sin respuesta, reflector CAÍDO\n", 
+                    (long)(now - last_rx_host2));
+            host2_connected = 0;
+            host2_connect = 1;
         }
 
+        // Reconexión Host1
+        if (host1_connect) {
+            host1_connect = 0;
+            reconnect_host(udp1, &host1, 1, dgid_to_host1, &host1_connected);
+            last_rx_host1 = time(NULL);
+        }
+        
+        // Reconexión Host2
+        if (host2_connect) {
+            host2_connect = 0;
+            reconnect_host(udp2, &host2, 2, dgid_to_host2, &host2_connected);
+            last_rx_host2 = time(NULL);
+        }
+
+        // Esperar datos
         FD_ZERO(&udpset);
         FD_SET(udp1, &udpset);
         FD_SET(udp2, &udpset);
-        r = select(maxudp, &udpset, NULL, NULL, NULL);
+        r = select(maxudp, &udpset, NULL, NULL, &tv);
 
         rxlen = 0;
         if(r > 0){
@@ -1180,23 +1227,48 @@ int main(int argc, char **argv)
                 rxlen = recvfrom(udp2, buf, BUFSIZE, 0, (struct sockaddr *)&rx, &l), udprx = udp2;
         }
 
-        if(rxlen == 155){
-            fich_decode(&buf[40]);
-            fich_set_voip(false);
+        // ✅ PROCESAR CUALQUIER PAQUETE del reflector (no solo 155 bytes)
+        if(rxlen > 0){
+            // Paquete de Host1
+            if(udprx == udp1 && rx.sin_addr.s_addr == host1.sin_addr.s_addr){
+                // ✅ REINICIAR LOST TIMER con CUALQUIER paquete
+                last_rx_host1 = time(NULL);
+                host1_connected = 1;
+                
+                // ✅ Solo procesar paquetes de voz (155 bytes)
+                if(rxlen == 155){
+                    fich_decode(&buf[40]);
+                    fich_set_voip(false);
 
-            if(argc == 6){
-                if(udprx == udp1)       // de host1 → a host2
-                    m_fich[3U] = dgid_to_host2;
-                else if(udprx == udp2)  // de host2 → a host1
-                    m_fich[3U] = dgid_to_host1;
+                    if(argc == 6){
+                        m_fich[3U] = dgid_to_host2;
+                    }
+
+                    fich_encode(&buf[40]);
+                    sendto(udp2, buf, rxlen, 0, (struct sockaddr *)&host2, sizeof(host2));
+                }
+                // Los paquetes YSFP (14 bytes) ya actualizaron el timer
             }
+            // Paquete de Host2
+            else if(udprx == udp2 && rx.sin_addr.s_addr == host2.sin_addr.s_addr){
+                // ✅ REINICIAR LOST TIMER con CUALQUIER paquete
+                last_rx_host2 = time(NULL);
+                host2_connected = 1;
+                
+                // ✅ Solo procesar paquetes de voz (155 bytes)
+                if(rxlen == 155){
+                    fich_decode(&buf[40]);
+                    fich_set_voip(false);
 
-            fich_encode(&buf[40]);
+                    if(argc == 6){
+                        m_fich[3U] = dgid_to_host1;
+                    }
 
-            if(udprx == udp1 && rx.sin_addr.s_addr == host1.sin_addr.s_addr)
-                sendto(udp2, buf, rxlen, 0, (struct sockaddr *)&host2, sizeof(host2));
-            else if(udprx == udp2 && rx.sin_addr.s_addr == host2.sin_addr.s_addr)
-                sendto(udp1, buf, rxlen, 0, (struct sockaddr *)&host1, sizeof(host1));
+                    fich_encode(&buf[40]);
+                    sendto(udp1, buf, rxlen, 0, (struct sockaddr *)&host1, sizeof(host1));
+                }
+                // Los paquetes YSFP (14 bytes) ya actualizaron el timer
+            }
         }
     }
     return 0;
