@@ -1,6 +1,7 @@
 /*
     dgidcon - fork ysfcon YSF Reflector Connector with FICH codec + DGID override + auto-room activation
     Copyright (C) 2019 Doug McLain - Modificado 2025 by HP3ICC Esteban Mackay
+    - Mejora: Reconexión automática solo en fallo real (sin timeout falso)
 */
 #include <stdio.h>
 #include <stdbool.h>
@@ -15,7 +16,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
-#include <time.h>  // ← AÑADE ESTE
+#include <time.h>
+#include <errno.h>
 
 #define BUFSIZE 2048
 //#define DEBUG
@@ -47,6 +49,12 @@ uint8_t host2_connect;
 /* DGID override (0 = pass-through, 1-99 = forzar ese DGID) */
 uint8_t dgid_to_host1 = 0U;
 uint8_t dgid_to_host2 = 0U;
+
+/* Variables de estado de conexión */
+uint8_t host1_connected = 0;
+uint8_t host2_connected = 0;
+uint8_t ping_fail_count1 = 0;
+uint8_t ping_fail_count2 = 0;
 
 uint16_t m_metrics1[16];
 uint16_t m_metrics2[16];
@@ -755,7 +763,7 @@ void fich_set_ft(unsigned char ft);
 void fich_set_mr(unsigned char mr);
 void fich_set_voip(bool on);
 void fich_encode(unsigned char* bytes);
-void fich_decode(const unsigned char* bytes);  // ← AÑADIR ESTA DECLARACIÓN
+void fich_decode(const unsigned char* bytes);
 void generate_voice_payload(unsigned char* payload, int frame_num);
 
 /* ============================================================= */
@@ -800,11 +808,11 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         frame[46] = 0x00; frame[47] = 0x00;
         frame[48] = fn;
         
-        // FICH - Header Frame (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
+        // FICH - Header Frame
         memset(m_fich, 0x00, 6);
-        fich_set_fi(0);              // FI=0: Header
-        fich_set_cs(2);              // CS=2: YSF  
-        fich_set_cm(0);              // CM=0: Non-communication (ORIGINAL)
+        fich_set_fi(0);
+        fich_set_cs(2);
+        fich_set_cm(0);
         fich_set_fn(fn >> 1);
         fich_set_ft(1);
         fich_set_mr(0);
@@ -816,7 +824,6 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         fich_encode(frame + 40);
         
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-//        fprintf(stderr, "✓ Header frame %d enviado\n", i);
         fn += 2;
         
         ts.tv_sec = 0;
@@ -824,7 +831,7 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         nanosleep(&ts, NULL);
     }
     
-    // 2. VOICE FRAMES (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
+    // 2. VOICE FRAMES
     fprintf(stderr, "Enviando frames de voz...\n");
     for (int i = 0; i < 20; i++) {
         memset(frame, 0x00, 155);
@@ -839,9 +846,9 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         frame[48] = fn;
         
         memset(m_fich, 0x00, 6);
-        fich_set_fi(2);              // FI=1: Voice Full Rate (ORIGINAL)
-        fich_set_cs(2);              // CS=2: YSF
-        fich_set_cm(1);              // CM=0: Non-communication (ORIGINAL)
+        fich_set_fi(2);
+        fich_set_cs(2);
+        fich_set_cm(1);
         fich_set_fn(fn >> 1);
         fich_set_ft(0);
         fich_set_mr(0);
@@ -853,7 +860,6 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         generate_voice_payload(frame + 55, i);
         
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-//        fprintf(stderr, "✓ Voice frame %d enviado\n", i);
         fn += 2;
         
         ts.tv_sec = 0;
@@ -861,7 +867,7 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         nanosleep(&ts, NULL);
     }
     
-    // 3. TERMINATION (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
+    // 3. TERMINATION
     fprintf(stderr, "Enviando frame de terminación...\n");
     for (int i = 0; i < 3; i++) {
         memset(frame, 0x00, 155);
@@ -878,9 +884,9 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         memset(m_fich, 0x00, 6);
         fich_set_fi(2);
         fich_set_cs(2);
-        fich_set_cm(1);              // CM=0: Non-communication (ORIGINAL)
+        fich_set_cm(1);
         fich_set_fn(fn >> 1);
-        fich_set_ft(1);              // FT=1: Final
+        fich_set_ft(1);
         fich_set_mr(0);
         fich_set_dt(2);
         fich_set_voip(false);
@@ -889,7 +895,6 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         fich_encode(frame + 40);
         
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-//        fprintf(stderr, "✓ Termination frame %d enviado\n", i);
         
         if (i < 2) {
             ts.tv_sec = 0;
@@ -913,10 +918,46 @@ void process_signal(int sig)
         exit(EXIT_SUCCESS);
     }
     if(sig == SIGALRM){
-        buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
-        memcpy(&buf[4], callsign, 10);
-        sendto(udp1, buf, 14, 0, (const struct sockaddr *)&host1, sizeof(host1));
-        sendto(udp2, buf, 14, 0, (const struct sockaddr *)&host2, sizeof(host2));
+        // Heartbeat - solo si estamos conectados
+        ssize_t sent1 = 0, sent2 = 0;
+        
+        if(host1_connected) {
+            buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
+            memcpy(&buf[4], callsign, 10);
+            sent1 = sendto(udp1, buf, 14, 0, (struct sockaddr *)&host1, sizeof(host1));
+        }
+        
+        if(host2_connected) {
+            buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
+            memcpy(&buf[4], callsign, 10);
+            sent2 = sendto(udp2, buf, 14, 0, (struct sockaddr *)&host2, sizeof(host2));
+        }
+        
+        // Detectar fallos en el envío (socket roto)
+        if(sent1 < 0 && host1_connected) {
+            ping_fail_count1++;
+            if(ping_fail_count1 > 3) {
+                fprintf(stderr, "⚠️ YSF1: 3 pings fallidos, reconectando...\n");
+                host1_connected = 0;
+                host1_connect = 1;
+                ping_fail_count1 = 0;
+            }
+        } else {
+            ping_fail_count1 = 0;
+        }
+        
+        if(sent2 < 0 && host2_connected) {
+            ping_fail_count2++;
+            if(ping_fail_count2 > 3) {
+                fprintf(stderr, "⚠️ YSF2: 3 pings fallidos, reconectando...\n");
+                host2_connected = 0;
+                host2_connect = 1;
+                ping_fail_count2 = 0;
+            }
+        } else {
+            ping_fail_count2 = 0;
+        }
+        
         alarm(5);
     }
 }
@@ -1079,7 +1120,7 @@ void fich_encode(unsigned char* bytes)
     }
 }
 
-/* Implementación de las funciones FICH (ahora al final para que compilen correctamente) */
+/* Implementación de las funciones FICH */
 void fich_set_dt(unsigned char dt)  { m_fich[2U] &= 0x3FU; m_fich[2U] |= (dt << 6) & 0xC0U; }
 void fich_set_fi(unsigned char fi)  { m_fich[0U] &= 0x3FU; m_fich[0U] |= (fi << 6) & 0xC0U; }
 void fich_set_cs(unsigned char cs)  { m_fich[0U] &= 0xCFU; m_fich[0U] |= (cs << 4) & 0x30U; }
@@ -1097,10 +1138,12 @@ int main(int argc, char **argv)
     int host1_port, host2_port;
     socklen_t l = sizeof(host1);
     int rxlen, r, udprx, maxudp;
+    struct timeval tv;
 
     if(argc != 4 && argc != 6){
         fprintf(stderr, "Usage: ysf2ysf [CALLSIGN] [YSFHost1:PORT] [YSFHost2:PORT] [DGID_to_Host1] [DGID_to_Host2]\n");
         fprintf(stderr, "DGID opcionales 00-99. Sin ellos → pass-through\n");
+        fprintf(stderr, "Sin timeout automático - reconexión solo por fallo real\n");
         return 0;
     }
 
@@ -1125,6 +1168,7 @@ int main(int argc, char **argv)
         printf("DGID → Hacia YSF1: %02u  |  Hacia YSF2: %02u  + activación automática de sala\n", dgid_to_host1, dgid_to_host2);
     else
         printf("DGID: Pass-through (sin activación automática)\n");
+    printf("Sin timeout automático - reconexión solo por fallo real\n");
 
     signal(SIGINT, process_signal);
     signal(SIGALRM, process_signal);
@@ -1132,6 +1176,10 @@ int main(int argc, char **argv)
     if ((udp1 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { perror("udp1"); return 0; }
     if ((udp2 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { perror("udp2"); return 0; }
     maxudp = max(udp1, udp2) + 1;
+
+    // Configurar timeout para select (1 segundo para verificar reconexiones)
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
 
     memset(&host1, 0, sizeof(host1)); host1.sin_family = AF_INET; host1.sin_port = htons(host1_port);
     memset(&host2, 0, sizeof(host2)); host2.sin_family = AF_INET; host2.sin_port = htons(host2_port);
@@ -1141,36 +1189,71 @@ int main(int argc, char **argv)
     hp = gethostbyname(host2_url); if (!hp) { fprintf(stderr, "cannot resolve %s\n", host2_url); return 0; }
     memcpy(&host2.sin_addr, hp->h_addr_list[0], hp->h_length);
 
+    // Inicializar estado de conexión
     host1_connect = 1;
     host2_connect = 1;
+    host1_connected = 0;
+    host2_connected = 0;
+    ping_fail_count1 = 0;
+    ping_fail_count2 = 0;
+    
     alarm(5);
 
+    fprintf(stderr, "=== Puente YSF iniciado (sin timeout automático) ===\n");
+    fprintf(stderr, "Reconexión solo por fallo real de socket o al inicio\n");
+
     while (1) {
-        if(host1_connect){
+        // Reconexión YSF1 (solo si se solicitó)
+        if (host1_connect) {
             host1_connect = 0;
-            buf[0]='Y';buf[1]='S';buf[2]='F';buf[3]='P';
+            fprintf(stderr, "Conectando a YSF1...\n");
+            
+            // Enviar ping inicial
+            buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
             memcpy(&buf[4], callsign, 10);
             sendto(udp1, buf, 14, 0, (struct sockaddr *)&host1, sizeof(host1));
-            fprintf(stderr, "Connecting to YSF1...\n");
-            sleep(1);      // ← Espera 2 segundos antes del burst
-            if (argc == 6 && dgid_to_host1 >= 1U)
+            
+            sleep(1);
+            
+            // Enviar burst de activación si está configurado
+            if (argc == 6 && dgid_to_host1 >= 1U) {
                 send_activation_burst(udp1, &host1, dgid_to_host1);
+                fprintf(stderr, "✅ Activación YSF1 enviada\n");
+            }
+            
+            host1_connected = 1;
+            ping_fail_count1 = 0;
+            fprintf(stderr, "✅ YSF1 conectado\n");
         }
-        if(host2_connect){
+        
+        // Reconexión YSF2 (solo si se solicitó)
+        if (host2_connect) {
             host2_connect = 0;
-            buf[0]='Y';buf[1]='S';buf[2]='F';buf[3]='P';
+            fprintf(stderr, "Conectando a YSF2...\n");
+            
+            // Enviar ping inicial
+            buf[0] = 'Y'; buf[1] = 'S'; buf[2] = 'F'; buf[3] = 'P';
             memcpy(&buf[4], callsign, 10);
             sendto(udp2, buf, 14, 0, (struct sockaddr *)&host2, sizeof(host2));
-            fprintf(stderr, "Connecting to YSF2...\n");
-            sleep(1);      // ← Espera 2 segundos antes del burst
-            if (argc == 6 && dgid_to_host2 >= 1U)
+            
+            sleep(1);
+            
+            // Enviar burst de activación si está configurado
+            if (argc == 6 && dgid_to_host2 >= 1U) {
                 send_activation_burst(udp2, &host2, dgid_to_host2);
+                fprintf(stderr, "✅ Activación YSF2 enviada\n");
+            }
+            
+            host2_connected = 1;
+            ping_fail_count2 = 0;
+            fprintf(stderr, "✅ YSF2 conectado\n");
         }
 
+        // Esperar datos con timeout de 1 segundo
         FD_ZERO(&udpset);
         FD_SET(udp1, &udpset);
         FD_SET(udp2, &udpset);
-        r = select(maxudp, &udpset, NULL, NULL, NULL);
+        r = select(maxudp, &udpset, NULL, NULL, &tv);
 
         rxlen = 0;
         if(r > 0){
@@ -1181,23 +1264,39 @@ int main(int argc, char **argv)
         }
 
         if(rxlen == 155){
-            fich_decode(&buf[40]);
-            fich_set_voip(false);
+            // Verificar que el paquete viene del reflector correcto
+            if(udprx == udp1 && rx.sin_addr.s_addr == host1.sin_addr.s_addr){
+                host1_connected = 1;
+                ping_fail_count1 = 0;  // Resetear contador de fallos
+                
+                fich_decode(&buf[40]);
+                fich_set_voip(false);
 
-            if(argc == 6){
-                if(udprx == udp1)       // de host1 → a host2
+                if(argc == 6){
+                    // De host1 → a host2 (sobrescribir DGID)
                     m_fich[3U] = dgid_to_host2;
-                else if(udprx == udp2)  // de host2 → a host1
-                    m_fich[3U] = dgid_to_host1;
-            }
+                }
 
-            fich_encode(&buf[40]);
-
-            if(udprx == udp1 && rx.sin_addr.s_addr == host1.sin_addr.s_addr)
+                fich_encode(&buf[40]);
                 sendto(udp2, buf, rxlen, 0, (struct sockaddr *)&host2, sizeof(host2));
-            else if(udprx == udp2 && rx.sin_addr.s_addr == host2.sin_addr.s_addr)
+            }
+            else if(udprx == udp2 && rx.sin_addr.s_addr == host2.sin_addr.s_addr){
+                host2_connected = 1;
+                ping_fail_count2 = 0;  // Resetear contador de fallos
+                
+                fich_decode(&buf[40]);
+                fich_set_voip(false);
+
+                if(argc == 6){
+                    // De host2 → a host1 (sobrescribir DGID)
+                    m_fich[3U] = dgid_to_host1;
+                }
+
+                fich_encode(&buf[40]);
                 sendto(udp1, buf, rxlen, 0, (struct sockaddr *)&host1, sizeof(host1));
+            }
         }
+        // Si rxlen es 0, timeout de select, volvemos a verificar reconexiones
     }
     return 0;
 }
