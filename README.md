@@ -7,6 +7,7 @@ Each program is a single C file, and no makefile is required.  To build, simply 
 gcc -o dmrcon dmrcon.c
 gcc -o refcon refcon.c
 gcc -o ysfcon ysfcon.c
+gcc -o dgidcon dgid.c
 ```
 
 # Usage
@@ -17,6 +18,10 @@ Connect 2 DSTAR DPlus (REF) reflectors:
 Connect 2 YSF reflectors
 ```
 ./ysfcon [CALLSIGN] [YSFHost1IP:PORT] [YSFHost2IP:PORT]
+```
+Connect 2 YSF reflectors fix DG-ID
+```
+./ysfcon [CALLSIGN] [YSFHost1IP:PORT] [YSFHost2IP:PORT] [DG-ID_YSF1] [DG-ID_YSF2]
 ```
 Connect 2 DMR talkgroups
 ```
