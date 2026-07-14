@@ -21,7 +21,7 @@ Connect 2 YSF reflectors
 ```
 Connect 2 YSF reflectors fix DG-ID
 ```
-./ysfcon [CALLSIGN] [YSFHost1IP:PORT] [YSFHost2IP:PORT] [DG-ID_YSF1] [DG-ID_YSF2]
+./dgidcon [CALLSIGN] [YSFHost1IP:PORT] [YSFHost2IP:PORT] [DG-ID_YSF1] [DG-ID_YSF2]
 ```
 Connect 2 DMR talkgroups
 ```
