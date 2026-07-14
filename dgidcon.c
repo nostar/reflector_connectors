@@ -887,7 +887,7 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
 /* ============================================================= */
 /* RECONEXIÓN INDEPENDIENTE */
 /* ============================================================= */
-void reconnect_host(int udp_sock, struct sockaddr_in *host, uint8_t host_id, uint8_t dgid, uint8_t *connect_flag)
+void reconnect_host(int udp_sock, struct sockaddr_in *host, uint8_t host_id, uint8_t dgid)
 {
     fprintf(stderr, "🔄 Reconectando a YSF%d...\n", host_id);
     
@@ -901,9 +901,7 @@ void reconnect_host(int udp_sock, struct sockaddr_in *host, uint8_t host_id, uin
         send_activation_burst(udp_sock, host, dgid);
         fprintf(stderr, "✅ Activación YSF%d enviada (DGID %02u)\n", host_id, dgid);
     }
-    
-    *connect_flag = 1;
-    fprintf(stderr, "✅ YSF%d reconectado\n", host_id);
+    fprintf(stderr, "✅ YSF%d: YSFP/activación enviados (esperando respuesta)\n", host_id);
 }
 
 /* ============================================================= */
@@ -1183,37 +1181,43 @@ int main(int argc, char **argv)
     while (1) {
         time_t now = time(NULL);
         
-        // Lost Timer Host1
-        if (host1_connected && (now - last_rx_host1) > LOST_TIMEOUT) {
-            fprintf(stderr, "⚠️ YSF1: %ld segundos sin respuesta, reflector CAÍDO\n", 
-                    (long)(now - last_rx_host1));
-            host1_connected = 0;
+        // Lost Timer Host1 — reintenta si no hay RX (arranque o caída)
+        if ((now - last_rx_host1) > LOST_TIMEOUT) {
+            if (host1_connected) {
+                fprintf(stderr, "⚠️ YSF1: %ld segundos sin respuesta, reflector CAÍDO\n",
+                        (long)(now - last_rx_host1));
+                host1_connected = 0;
+            }
             host1_connect = 1;
         }
         
         // Lost Timer Host2
-        if (host2_connected && (now - last_rx_host2) > LOST_TIMEOUT) {
-            fprintf(stderr, "⚠️ YSF2: %ld segundos sin respuesta, reflector CAÍDO\n", 
-                    (long)(now - last_rx_host2));
-            host2_connected = 0;
+        if ((now - last_rx_host2) > LOST_TIMEOUT) {
+            if (host2_connected) {
+                fprintf(stderr, "⚠️ YSF2: %ld segundos sin respuesta, reflector CAÍDO\n",
+                        (long)(now - last_rx_host2));
+                host2_connected = 0;
+            }
             host2_connect = 1;
         }
 
         // Reconexión Host1
         if (host1_connect) {
             host1_connect = 0;
-            reconnect_host(udp1, &host1, 1, dgid_to_host1, &host1_connected);
+            reconnect_host(udp1, &host1, 1, dgid_to_host1);
             last_rx_host1 = time(NULL);
         }
         
         // Reconexión Host2
         if (host2_connect) {
             host2_connect = 0;
-            reconnect_host(udp2, &host2, 2, dgid_to_host2, &host2_connected);
+            reconnect_host(udp2, &host2, 2, dgid_to_host2);
             last_rx_host2 = time(NULL);
         }
 
-        // Esperar datos
+        // Esperar datos (tv must be reset each iteration: select() overwrites it)
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
         FD_ZERO(&udpset);
         FD_SET(udp1, &udpset);
         FD_SET(udp2, &udpset);
@@ -1231,7 +1235,9 @@ int main(int argc, char **argv)
         if(rxlen > 0){
             // Paquete de Host1
             if(udprx == udp1 && rx.sin_addr.s_addr == host1.sin_addr.s_addr){
-                // ✅ REINICIAR LOST TIMER con CUALQUIER paquete
+                if (!host1_connected) {
+                    fprintf(stderr, "✅ YSF1 enlazado (RX %d bytes desde reflector)\n", rxlen);
+                }
                 last_rx_host1 = time(NULL);
                 host1_connected = 1;
                 
@@ -1251,7 +1257,9 @@ int main(int argc, char **argv)
             }
             // Paquete de Host2
             else if(udprx == udp2 && rx.sin_addr.s_addr == host2.sin_addr.s_addr){
-                // ✅ REINICIAR LOST TIMER con CUALQUIER paquete
+                if (!host2_connected) {
+                    fprintf(stderr, "✅ YSF2 enlazado (RX %d bytes desde reflector)\n", rxlen);
+                }
                 last_rx_host2 = time(NULL);
                 host2_connected = 1;
                 
