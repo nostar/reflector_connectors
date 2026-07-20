@@ -203,6 +203,7 @@ static const unsigned char fillbuf[64] = { 0x80, 0 };
 // --- Función para obtener el ID de DMR CORREGIDA ---
 int get_dmrid(int host_num, int for_traffic) {
     int id_to_use = dmrid;
+    (void)host_num; /* used only when USE_7DIGIT_ID_PEER* is defined */
 
     if (for_traffic) {
 #if defined(USE_7DIGIT_ID_PEER1)
@@ -639,6 +640,10 @@ void sha256_process_block(const unsigned char* buffer, unsigned int len)
 void sha256_generate(char *in, int len, char *out)
 {
     unsigned int bytes, size;
+    unsigned int nlen = (len < 0) ? 0U : (unsigned int)len;
+    unsigned char *uin = (unsigned char *)in;
+    unsigned char *uout = (unsigned char *)out;
+
     sha256_state[0] = 0x6a09e667UL;
     sha256_state[1] = 0xbb67ae85UL;
     sha256_state[2] = 0x3c6ef372UL;
@@ -651,26 +656,26 @@ void sha256_generate(char *in, int len, char *out)
     sha256_buflen   = 0;
     if (sha256_buflen != 0U) {
         unsigned int left_over = sha256_buflen;
-        unsigned int add = 128U - left_over > len ? len : 128U - left_over;
-        memcpy(&((char*)sha256_buffer)[left_over], in, add);
+        unsigned int add = (128U - left_over > nlen) ? nlen : (128U - left_over);
+        memcpy(&((char*)sha256_buffer)[left_over], uin, add);
         sha256_buflen += add;
         if (sha256_buflen > 64U) {
             sha256_process_block((unsigned char*)sha256_buffer, sha256_buflen & ~63U);
             sha256_buflen &= 63U;
             memcpy(sha256_buffer, &((char*)sha256_buffer)[(left_over + add) & ~63U], sha256_buflen);
         }
-        in += add;
-        len -= add;
+        uin += add;
+        nlen -= add;
     }
-    if (len >= 64U) {
-        sha256_process_block(in, len & ~63U);
-        in += (len & ~63U);
-        len &= 63U;
+    if (nlen >= 64U) {
+        sha256_process_block(uin, nlen & ~63U);
+        uin += (nlen & ~63U);
+        nlen &= 63U;
     }
-    if (len > 0U) {
+    if (nlen > 0U) {
         unsigned int left_over = sha256_buflen;
-        memcpy(&((char*)sha256_buffer)[left_over], in, len);
-        left_over += len;
+        memcpy(&((char*)sha256_buffer)[left_over], uin, nlen);
+        left_over += nlen;
         if (left_over >= 64U) {
             sha256_process_block((unsigned char*)sha256_buffer, 64U);
             left_over -= 64U;
@@ -688,7 +693,7 @@ void sha256_generate(char *in, int len, char *out)
     memcpy(&((char*)sha256_buffer)[bytes], fillbuf, (size - 2) * 4 - bytes);
     sha256_process_block((unsigned char*)sha256_buffer, size * 4);
     for (unsigned int i = 0U; i < 8U; i++)
-        set_uint32(out + i * sizeof(sha256_state[0]), SWAP(sha256_state[i]));
+        set_uint32(uout + i * sizeof(sha256_state[0]), SWAP(sha256_state[i]));
 }
 void lc_get_data(uint8_t *bytes)
 {
@@ -844,7 +849,6 @@ int process_connect(int connect_status, char *buf, int h)
     char in[100];
     char out[400];
     int len = 0;
-    char latitude[20U], longitude[20U];
     memset(in, 0, 100);
     memset(out, 0, 400);
 
