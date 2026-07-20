@@ -2,12 +2,20 @@
 Software to connect DSTAR DPlus reflectors, YSF Reflectors, and DMR talkgroups from different servers.  Example applications for these utilties are to connect a Dplus DSTAR reflector to an XLXD network via REF to REF using refcon, or connecting a Brandmeister/TGIF talkgroup to an XLXD network via dmrcon. 
 
 # Build
-Each program is a single C file, and no makefile is required.  To build, simply run gcc for each file:
+
+```bash
+make all          # build every connector
+make dgidcon      # one target: dmrcon | refcon | ysfcon | dgidcon | xrfcon
+make clean
+```
+
+Or compile by hand:
 ```
 gcc -o dmrcon dmrcon.c
 gcc -o refcon refcon.c
 gcc -o ysfcon ysfcon.c
-gcc -o dgidcon dgid.c
+gcc -o dgidcon dgidcon.c
+gcc -o xrfcon xrfcon.c
 ```
 
 # Usage

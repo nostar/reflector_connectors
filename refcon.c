@@ -284,8 +284,8 @@ int main(int argc, char **argv)
 		if((rxlen == 5) && (buf[4] == 0x01)){
 			srand(time(NULL));
 			int x = (rand() % (999999 - 7245 + 1)) + 7245;
-			char serial[9];
-			sprintf(serial, "HS%06d", x);
+			char serial[10];
+			snprintf(serial, sizeof(serial), "HS%06d", x % 1000000);
 			buf[0] = 0x1c;
 			buf[1] = 0xc0;
 			buf[2] = 0x04;

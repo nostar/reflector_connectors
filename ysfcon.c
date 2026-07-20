@@ -758,8 +758,6 @@ int max(int x, int y)
 
 void process_signal(int sig)
 {
-	static uint32_t c1 = 0;
-	static uint32_t c2 = 0;
 	if(sig == SIGINT){
 		fprintf(stderr, "\n\nShutting down link\n");
 		buf[0] = 'Y';
@@ -1065,16 +1063,9 @@ int main(int argc, char **argv)
 	int 	host2_port;
 	socklen_t l = sizeof(host1);
 	int rxlen;
-	int len = 0;
-	int reuse = 1;
 	int r;
 	int udprx,maxudp;
-	
-	static uint64_t ping_cnt = 0;
-	uint16_t streamid = 0;
-	
-	uint8_t connect_status;
-	
+
 	if(argc != 4){
 		fprintf(stderr, "Usage: ysfcon [CALLSIGN] [YSFHost1IP:PORT] [YSFHost2IP:PORT]\n");
 		return 0;
