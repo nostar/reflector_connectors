@@ -769,6 +769,8 @@ void fich_encode(unsigned char* bytes);
 void fich_decode(const unsigned char* bytes);
 void generate_voice_payload(unsigned char* payload, int frame_num);
 void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t forced_dgid);
+/* Rewrite FICH for outbound YSFD so FCS/clients accept bridged frames. */
+void prepare_ysfd_forward(uint8_t *frame155, uint8_t out_dgid);
 
 /* ============================================================= */
 /* ACTIVACIÓN AUTOMÁTICA */
@@ -882,6 +884,23 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         }
     }
     fprintf(stderr, "Transmisión YSF completa enviada (DGID %02u)\n", forced_dgid);
+}
+
+/* ============================================================= */
+/* FORWARD: align YSFD with what a YSF client (e.g. ysf2dmr) sends */
+/* ============================================================= */
+void prepare_ysfd_forward(uint8_t *frame155, uint8_t out_dgid)
+{
+    /* Gateway/RPT must match our YSFP login; FCS drops foreign gateways. */
+    memcpy(frame155 + 4, callsign, 10);
+
+    fich_decode(frame155 + 40);
+    fich_set_voip(false);
+    /* Force VD Mode 2 like ysf2dmr / MMDVM outbound voice. */
+    fich_set_dt(2);
+    if (out_dgid >= 1U)
+        m_fich[3U] = out_dgid;
+    fich_encode(frame155 + 40);
 }
 
 /* ============================================================= */
@@ -1094,7 +1113,8 @@ void fich_encode(unsigned char* bytes)
     }
 }
 
-void fich_set_dt(unsigned char dt)  { m_fich[2U] &= 0x3FU; m_fich[2U] |= (dt << 6) & 0xC0U; }
+/* DT = bits 1-0 of m_fich[2] (CYSFFICH / MMDVM). Old code wrongly used bits 7-6. */
+void fich_set_dt(unsigned char dt)  { m_fich[2U] &= 0xFCU; m_fich[2U] |= dt & 0x03U; }
 void fich_set_fi(unsigned char fi)  { m_fich[0U] &= 0x3FU; m_fich[0U] |= (fi << 6) & 0xC0U; }
 void fich_set_cs(unsigned char cs)  { m_fich[0U] &= 0xCFU; m_fich[0U] |= (cs << 4) & 0x30U; }
 void fich_set_cm(unsigned char cm)  { m_fich[0U] &= 0xF3U; m_fich[0U] |= (cm << 2) & 0x0CU; }
@@ -1131,12 +1151,14 @@ int main(int argc, char **argv)
     host2_url = strtok(argv[3], ":"); host2_port = atoi(strtok(NULL, ":"));
 
     if(argc == 6){
-        dgid_to_host1 = (uint8_t)atoi(argv[4]);
-        dgid_to_host2 = (uint8_t)atoi(argv[5]);
-        if(dgid_to_host1 < 0 || dgid_to_host1 > 99 || dgid_to_host2 < 0 || dgid_to_host2 > 99){
+        int d1 = atoi(argv[4]);
+        int d2 = atoi(argv[5]);
+        if(d1 < 0 || d1 > 99 || d2 < 0 || d2 > 99){
             fprintf(stderr, "Error: DGID debe estar entre 00 y 99.\n");
             return 1;
         }
+        dgid_to_host1 = (uint8_t)d1;
+        dgid_to_host2 = (uint8_t)d2;
     }
 
     printf("YSF1: %s:%d\n", host1_url, host1_port);
@@ -1243,14 +1265,7 @@ int main(int argc, char **argv)
                 
                 // ✅ Solo procesar paquetes de voz (155 bytes)
                 if(rxlen == 155){
-                    fich_decode(&buf[40]);
-                    fich_set_voip(false);
-
-                    if(argc == 6){
-                        m_fich[3U] = dgid_to_host2;
-                    }
-
-                    fich_encode(&buf[40]);
+                    prepare_ysfd_forward(buf, (argc == 6) ? dgid_to_host2 : 0U);
                     sendto(udp2, buf, rxlen, 0, (struct sockaddr *)&host2, sizeof(host2));
                 }
                 // Los paquetes YSFP (14 bytes) ya actualizaron el timer
@@ -1265,14 +1280,7 @@ int main(int argc, char **argv)
                 
                 // ✅ Solo procesar paquetes de voz (155 bytes)
                 if(rxlen == 155){
-                    fich_decode(&buf[40]);
-                    fich_set_voip(false);
-
-                    if(argc == 6){
-                        m_fich[3U] = dgid_to_host1;
-                    }
-
-                    fich_encode(&buf[40]);
+                    prepare_ysfd_forward(buf, (argc == 6) ? dgid_to_host1 : 0U);
                     sendto(udp1, buf, rxlen, 0, (struct sockaddr *)&host1, sizeof(host1));
                 }
                 // Los paquetes YSFP (14 bytes) ya actualizaron el timer
